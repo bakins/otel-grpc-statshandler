@@ -1,5 +1,7 @@
 # otel-grpc-statshandler
 
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/bakins/otel-grpc-statshandler)](https://pkg.go.dev/github.com/bakins/otel-grpc-statshandler)
+
 `otel-grpc-statshandler` implements [grpc.StatsHandler](https://pkg.go.dev/google.golang.org/grpc@v1.49.0/stats#Handler) for recording OpenTelemetry metrics and traces.
 
 [otelgrpc](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc) uses an interceptor based approach that can [miss some errors](https://github.com/open-telemetry/opentelemetry-go-contrib/issues/197) and also does not currently support metrics.
