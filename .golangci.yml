@@ -1,0 +1,26 @@
+run:
+  go: '1.19'
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - goconst
+    - gofumpt
+    - goimports
+    - gosec
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - nakedret
+    - revive
+    - staticcheck
+    - typecheck
+    - unused
+    - whitespace
+linter-settings:
+  govet:
+    check-shadowing: true
+    enable-all: true
+issues:
+  exlude-use-default: false
