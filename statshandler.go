@@ -1,3 +1,5 @@
+// Package statshandler implements a grpc.StatsHandler that records
+// OpenTelemetry traces and metrics
 package statshandler
 
 import (
@@ -23,12 +25,13 @@ import (
 )
 
 const (
-	instrumentationName = "otel-grpc-statshandler"
+	// DefaultInstrumentationName is the default used when creating meters and tracers.
+	DefaultInstrumentationName = "otel-grpc-statshandler"
 )
 
-// Handler implements https://pkg.go.dev/google.golang.org/grpc/stats#Handler
+// ServerHandler implements https://pkg.go.dev/google.golang.org/grpc/stats#ServerHandler
 // It records OpenTelemetry metrics and traces.
-type Handler struct {
+type ServerHandler struct {
 	tracer     trace.Tracer
 	propogator propagation.TextMapPropagator
 
@@ -39,7 +42,7 @@ type Handler struct {
 	rpcServerResponsesPerRPC syncint64.Histogram
 }
 
-func NewHandler(options ...Option) (*Handler, error) {
+func NewServerHandler(options ...Option) (*ServerHandler, error) {
 	c := config{}
 
 	for _, o := range options {
@@ -58,7 +61,11 @@ func NewHandler(options ...Option) (*Handler, error) {
 		c.propagator = otel.GetTextMapPropagator()
 	}
 
-	meter := c.meterProvider.Meter(instrumentationName)
+	if c.instrumentationName == "" {
+		c.instrumentationName = DefaultInstrumentationName
+	}
+
+	meter := c.meterProvider.Meter(c.instrumentationName)
 
 	// metrics from https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc/#rpc-server
 	rpcServerDuration, err := meter.SyncFloat64().Histogram("rpc.server.duration")
@@ -86,8 +93,8 @@ func NewHandler(options ...Option) (*Handler, error) {
 		return nil, err
 	}
 
-	handler := Handler{
-		tracer:                   c.tracerProvider.Tracer(instrumentationName),
+	handler := ServerHandler{
+		tracer:                   c.tracerProvider.Tracer(c.instrumentationName),
 		propogator:               c.propagator,
 		rpcServerDuration:        rpcServerDuration,
 		rpcServerRequestSize:     rpcServerRequestSize,
@@ -111,9 +118,18 @@ func (f optionFunc) apply(c *config) {
 }
 
 type config struct {
-	propagator     propagation.TextMapPropagator
-	tracerProvider trace.TracerProvider
-	meterProvider  metric.MeterProvider
+	propagator          propagation.TextMapPropagator
+	tracerProvider      trace.TracerProvider
+	meterProvider       metric.MeterProvider
+	instrumentationName string
+}
+
+// WithInstrumentationName returns an Option to use the TracerProvider when
+// creating a Tracer.
+func WithInstrumentationName(name string) Option {
+	return optionFunc(func(c *config) {
+		c.instrumentationName = name
+	})
 }
 
 // WithTracerProvider returns an Option to use the TracerProvider when
@@ -140,7 +156,6 @@ func WithPropagators(p propagation.TextMapPropagator) Option {
 	})
 }
 
-// TODO: https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc/#rpc-server
 type rpcObserve struct {
 	attributes       []attribute.KeyValue
 	startTime        time.Time
@@ -156,7 +171,7 @@ type contextKey struct {
 var rpcObserveKey = &contextKey{"rpc-observe"}
 
 // TagRPC implements per-RPC context management.
-func (s *Handler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
+func (s *ServerHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
 	md, _ := metadata.FromIncomingContext(ctx)
 	s.propogator.Extract(ctx, &metadataSupplier{metadata: md})
 
@@ -186,7 +201,7 @@ func (s *Handler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Co
 var grpcStatusOK = status.New(grpc_codes.OK, "OK")
 
 // HandleRPC implements per-RPC tracing and stats instrumentation.
-func (s *Handler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
+func (s *ServerHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 	span := trace.SpanFromContext(ctx)
 
 	// this should never be null, but we always check, just to be sure.
@@ -277,13 +292,13 @@ func (s *Handler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 }
 
 // TagConn exists to satisfy gRPC stats.Handler.
-func (s *Handler) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+func (s *ServerHandler) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
 	// no-op
 	return ctx
 }
 
 // HandleConn exists to satisfy gRPC stats.Handler.
-func (s *Handler) HandleConn(_ context.Context, _ stats.ConnStats) {
+func (s *ServerHandler) HandleConn(_ context.Context, _ stats.ConnStats) {
 	// no-op
 }
 
