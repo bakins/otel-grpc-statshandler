@@ -39,5 +39,4 @@ func main() {
 See [LICENSE](./LICENSE)
 
 ## TODO
-- client support
 - more test cases
