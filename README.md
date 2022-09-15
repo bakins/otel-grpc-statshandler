@@ -10,7 +10,6 @@ It records metrics and traces as decribed in:
 - https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc/
 - https://opentelemetry.io/docs/reference/specification/trace/semantic_conventions/rpc/
 
-It currently only supports grpc servers.
 
 PRs and patches are welcomed.
 

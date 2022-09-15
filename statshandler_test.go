@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	otelTrace "go.opentelemetry.io/otel/trace"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 	"google.golang.org/grpc"
@@ -32,6 +33,22 @@ func ExampleServerHandler() {
 	server := grpc.NewServer(grpc.StatsHandler(handler))
 
 	_ = server // use server
+}
+
+func ExampleClientHandler() {
+	handler, err := statshandler.NewClientHandler()
+	if err != nil {
+		// handle error
+	}
+
+	conn, err := grpc.Dial("myaddress:port", grpc.WithStatsHandler(handler))
+	if err != nil {
+		// handle error
+	}
+
+	client := pb.NewGreeterClient(conn)
+
+	_ = client // use client
 }
 
 func TestServerHandler(t *testing.T) {
@@ -72,6 +89,7 @@ func TestServerHandler(t *testing.T) {
 	require.Len(t, spans, 1)
 	span := spans[0]
 
+	require.Equal(t, otelTrace.SpanKindServer, span.SpanKind())
 	require.Equal(t, "/helloworld.Greeter/SayHello", span.Name())
 	require.Len(t, span.Events(), 2)
 

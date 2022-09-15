@@ -32,17 +32,27 @@ const (
 // ServerHandler implements https://pkg.go.dev/google.golang.org/grpc/stats#ServerHandler
 // It records OpenTelemetry metrics and traces.
 type ServerHandler struct {
-	tracer     trace.Tracer
-	propogator propagation.TextMapPropagator
-
-	rpcServerDuration        syncfloat64.Histogram
-	rpcServerRequestSize     syncint64.Histogram
-	rpcServerResponseSize    syncint64.Histogram
-	rpcServerRequestsPerRPC  syncint64.Histogram
-	rpcServerResponsesPerRPC syncint64.Histogram
+	handler
 }
 
-func NewServerHandler(options ...Option) (*ServerHandler, error) {
+// ServerHandler implements https://pkg.go.dev/google.golang.org/grpc/stats#ServerHandler
+// It records OpenTelemetry metrics and traces.
+type ClientHandler struct {
+	handler
+}
+
+type handler struct {
+	tracer             trace.Tracer
+	propogator         propagation.TextMapPropagator
+	spanKind           trace.SpanKind
+	rpcDuration        syncfloat64.Histogram
+	rpcRequestSize     syncint64.Histogram
+	rpcResponseSize    syncint64.Histogram
+	rpcRequestsPerRPC  syncint64.Histogram
+	rpcResponsesPerRPC syncint64.Histogram
+}
+
+func newHandler(spanKind trace.SpanKind, options []Option) (handler, error) {
 	c := config{}
 
 	for _, o := range options {
@@ -65,45 +75,78 @@ func NewServerHandler(options ...Option) (*ServerHandler, error) {
 		c.instrumentationName = DefaultInstrumentationName
 	}
 
+	// metrics from https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc/#rpc-server
+
 	meter := c.meterProvider.Meter(c.instrumentationName)
 
-	// metrics from https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc/#rpc-server
-	rpcServerDuration, err := meter.SyncFloat64().Histogram("rpc.server.duration")
+	prefix := "rpc.server"
+	if spanKind == trace.SpanKindClient {
+		prefix = "rpc.client"
+	}
+
+	rpcDuration, err := meter.SyncFloat64().Histogram(prefix + ".duration")
+	if err != nil {
+		return handler{}, err
+	}
+
+	rpcRequestSize, err := meter.SyncInt64().Histogram(prefix + ".request.size")
+	if err != nil {
+		return handler{}, err
+	}
+
+	rpcResponseSize, err := meter.SyncInt64().Histogram(prefix + ".response.size")
+	if err != nil {
+		return handler{}, err
+	}
+
+	rpcRequestsPerRPC, err := meter.SyncInt64().Histogram(prefix + ".requests_per_rpc")
+	if err != nil {
+		return handler{}, err
+	}
+
+	rpcResponsesPerRPC, err := meter.SyncInt64().Histogram(prefix + ".responses_per_rpc")
+	if err != nil {
+		return handler{}, err
+	}
+
+	h := handler{
+		tracer:             c.tracerProvider.Tracer(c.instrumentationName),
+		propogator:         c.propagator,
+		spanKind:           spanKind,
+		rpcDuration:        rpcDuration,
+		rpcRequestSize:     rpcRequestSize,
+		rpcResponseSize:    rpcResponseSize,
+		rpcRequestsPerRPC:  rpcRequestsPerRPC,
+		rpcResponsesPerRPC: rpcResponsesPerRPC,
+	}
+
+	return h, nil
+}
+
+func NewServerHandler(options ...Option) (*ServerHandler, error) {
+	h, err := newHandler(trace.SpanKindServer, options)
 	if err != nil {
 		return nil, err
 	}
 
-	rpcServerRequestSize, err := meter.SyncInt64().Histogram("rpc.server.request.size")
+	s := ServerHandler{
+		handler: h,
+	}
+
+	return &s, nil
+}
+
+func NewClientHandler(options ...Option) (*ClientHandler, error) {
+	h, err := newHandler(trace.SpanKindClient, options)
 	if err != nil {
 		return nil, err
 	}
 
-	rpcServerResponseSize, err := meter.SyncInt64().Histogram("rpc.server.response.size")
-	if err != nil {
-		return nil, err
+	c := ClientHandler{
+		handler: h,
 	}
 
-	rpcServerRequestsPerRPC, err := meter.SyncInt64().Histogram("rpc.server.requests_per_rpc")
-	if err != nil {
-		return nil, err
-	}
-
-	rpcServerResponsesPerRPC, err := meter.SyncInt64().Histogram("rpc.server.responses_per_rpc")
-	if err != nil {
-		return nil, err
-	}
-
-	handler := ServerHandler{
-		tracer:                   c.tracerProvider.Tracer(c.instrumentationName),
-		propogator:               c.propagator,
-		rpcServerDuration:        rpcServerDuration,
-		rpcServerRequestSize:     rpcServerRequestSize,
-		rpcServerResponseSize:    rpcServerResponseSize,
-		rpcServerRequestsPerRPC:  rpcServerRequestsPerRPC,
-		rpcServerResponsesPerRPC: rpcServerResponsesPerRPC,
-	}
-
-	return &handler, nil
+	return &c, nil
 }
 
 // Option applies an option value when creating a Handler
@@ -172,10 +215,22 @@ var rpcObserveKey = &contextKey{"rpc-observe"}
 
 // TagRPC implements per-RPC context management.
 func (s *ServerHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
-	md, _ := metadata.FromIncomingContext(ctx)
-	s.propogator.Extract(ctx, &metadataSupplier{metadata: md})
+	return s.handler.TagRPC(ctx, info)
+}
 
-	ctx, span := s.tracer.Start(ctx, info.FullMethodName, trace.WithSpanKind(trace.SpanKindServer))
+// TagRPC implements per-RPC context management.
+func (c *ClientHandler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
+	return c.handler.TagRPC(ctx, info)
+}
+
+func (h handler) TagRPC(ctx context.Context, info *stats.RPCTagInfo) context.Context {
+	md, _ := metadata.FromIncomingContext(ctx)
+	h.propogator.Extract(ctx, &metadataSupplier{metadata: md})
+
+	ctx, span := h.tracer.Start(ctx,
+		info.FullMethodName,
+		trace.WithSpanKind(h.spanKind),
+	)
 
 	// https://opentelemetry.io/docs/reference/specification/metrics/semantic_conventions/rpc/
 	// https://opentelemetry.io/docs/reference/specification/trace/semantic_conventions/rpc/
@@ -202,6 +257,15 @@ var grpcStatusOK = status.New(grpc_codes.OK, "OK")
 
 // HandleRPC implements per-RPC tracing and stats instrumentation.
 func (s *ServerHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
+	s.handler.HandleRPC(ctx, rs)
+}
+
+// HandleRPC implements per-RPC tracing and stats instrumentation.
+func (c *ClientHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
+	c.handler.HandleRPC(ctx, rs)
+}
+
+func (h handler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 	span := trace.SpanFromContext(ctx)
 
 	// this should never be null, but we always check, just to be sure.
@@ -215,7 +279,7 @@ func (s *ServerHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 		if observer != nil {
 			id = atomic.AddInt64(&observer.messagesReceived, 1)
-			s.rpcServerRequestSize.Record(ctx, int64(rs.Length), observer.attributes...)
+			h.rpcRequestSize.Record(ctx, int64(rs.Length), observer.attributes...)
 		}
 
 		span.AddEvent("message",
@@ -231,7 +295,7 @@ func (s *ServerHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 		if observer != nil {
 			id = atomic.AddInt64(&observer.messagesSent, 1)
-			s.rpcServerResponseSize.Record(ctx, int64(rs.Length), observer.attributes...)
+			h.rpcResponseSize.Record(ctx, int64(rs.Length), observer.attributes...)
 		}
 
 		span.AddEvent("message",
@@ -262,19 +326,19 @@ func (s *ServerHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 			duration := time.Since(observer.startTime).Milliseconds()
 
-			s.rpcServerDuration.Record(
+			h.rpcDuration.Record(
 				ctx,
 				float64(duration),
 				attributes...,
 			)
 
-			s.rpcServerRequestsPerRPC.Record(
+			h.rpcRequestsPerRPC.Record(
 				ctx,
 				observer.messagesReceived,
 				attributes...,
 			)
 
-			s.rpcServerResponsesPerRPC.Record(
+			h.rpcResponsesPerRPC.Record(
 				ctx,
 				observer.messagesSent,
 				attributes...,
@@ -299,6 +363,17 @@ func (s *ServerHandler) TagConn(ctx context.Context, _ *stats.ConnTagInfo) conte
 
 // HandleConn exists to satisfy gRPC stats.Handler.
 func (s *ServerHandler) HandleConn(_ context.Context, _ stats.ConnStats) {
+	// no-op
+}
+
+// TagConn exists to satisfy gRPC stats.Handler.
+func (c *ClientHandler) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	// no-op
+	return ctx
+}
+
+// HandleConn exists to satisfy gRPC stats.Handler.
+func (c *ClientHandler) HandleConn(_ context.Context, _ stats.ConnStats) {
 	// no-op
 }
 
