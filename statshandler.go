@@ -44,12 +44,12 @@ type ClientHandler struct {
 type handler struct {
 	tracer             trace.Tracer
 	propogator         propagation.TextMapPropagator
-	spanKind           trace.SpanKind
 	rpcDuration        syncfloat64.Histogram
 	rpcRequestSize     syncint64.Histogram
 	rpcResponseSize    syncint64.Histogram
 	rpcRequestsPerRPC  syncint64.Histogram
 	rpcResponsesPerRPC syncint64.Histogram
+	spanKind           trace.SpanKind
 }
 
 func newHandler(spanKind trace.SpanKind, options []Option) (handler, error) {
