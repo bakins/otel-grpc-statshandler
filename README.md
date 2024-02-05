@@ -1,3 +1,6 @@
+StatsHandler is now implemented in  https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc 
+
+This project is no longer needed.
 # otel-grpc-statshandler
 
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/bakins/otel-grpc-statshandler)](https://pkg.go.dev/github.com/bakins/otel-grpc-statshandler)
